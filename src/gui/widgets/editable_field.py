@@ -488,9 +488,13 @@ class SelectDialog(ctk.CTkToplevel):
         print(f"[DEBUG SelectDialog] Save button created with command: {self._on_save}")
 
     def _on_radio_click(self, option: str):
-        """单选按钮点击回调"""
+        """单选按钮点击回调 - 点击后自动保存并关闭"""
         print(f"[DEBUG SelectDialog] Radio button clicked: '{option}'")
         print(f"[DEBUG SelectDialog] radio_var current value: '{self.radio_var.get()}'")
+        # 自动保存并关闭对话框
+        print(f"[DEBUG SelectDialog] Auto-saving selection: '{option}'")
+        self.on_save(option)
+        self.destroy()
 
     def _on_radio_var_change(self, *args):
         """变量变化回调"""
