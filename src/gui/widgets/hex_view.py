@@ -496,7 +496,7 @@ class ByteEditDialog(ctk.CTkToplevel):
         super().__init__(parent)
 
         self.title(f"编辑字节 0x{offset:03X}")
-        self.geometry("300x280")
+        self.geometry("300x320")
         self.resizable(False, False)
 
         self.offset = offset
