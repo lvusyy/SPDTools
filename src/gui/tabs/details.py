@@ -126,10 +126,12 @@ class DetailsTab(ctk.CTkFrame):
 
     def _on_field_changed(self, key: str, value: str):
         """字段变更回调"""
+        print(f"[DEBUG DetailsTab] _on_field_changed called: key='{key}', value='{value}'")
         if not self.data_model.has_data:
+            print(f"[DEBUG DetailsTab] No data in model, returning early")
             return
 
-        print(f"[DEBUG] Field changed: key={key}, value={value}")
+        print(f"[DEBUG DetailsTab] Processing field change: key={key}, value={value}")
 
         # 根据字段类型更新 SPD 数据
         if key == "manufacturer":

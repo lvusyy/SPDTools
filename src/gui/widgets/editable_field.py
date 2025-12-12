@@ -434,6 +434,8 @@ class SelectDialog(ctk.CTkToplevel):
         self.on_save = on_save
         self.selected = current_value
 
+        print(f"[DEBUG SelectDialog] __init__: title='{title}', current_value='{current_value}', options_count={len(options)}")
+
         self.transient(parent)
         self.grab_set()
 
@@ -448,14 +450,21 @@ class SelectDialog(ctk.CTkToplevel):
         self.scroll_frame.pack(padx=20, fill="both", expand=True)
 
         self.radio_var = ctk.StringVar(value=self.current_value)
+        print(f"[DEBUG SelectDialog] radio_var created with initial value: '{self.radio_var.get()}'")
+
+        # 添加变量跟踪回调
+        self.radio_var.trace_add("write", self._on_radio_var_change)
+
         for option in self.options:
             rb = ctk.CTkRadioButton(
                 self.scroll_frame,
                 text=option,
                 variable=self.radio_var,
-                value=option
+                value=option,
+                command=lambda opt=option: self._on_radio_click(opt)
             )
             rb.pack(anchor="w", pady=2)
+            print(f"[DEBUG SelectDialog] Created radio button: '{option}'")
 
         # 按钮
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -469,14 +478,39 @@ class SelectDialog(ctk.CTkToplevel):
             command=self.destroy
         ).pack(side="left", expand=True)
 
-        ctk.CTkButton(
+        self.save_btn = ctk.CTkButton(
             btn_frame,
             text="选择",
             width=100,
             command=self._on_save
-        ).pack(side="right", expand=True)
+        )
+        self.save_btn.pack(side="right", expand=True)
+        print(f"[DEBUG SelectDialog] Save button created with command: {self._on_save}")
+
+    def _on_radio_click(self, option: str):
+        """单选按钮点击回调"""
+        print(f"[DEBUG SelectDialog] Radio button clicked: '{option}'")
+        print(f"[DEBUG SelectDialog] radio_var current value: '{self.radio_var.get()}'")
+
+    def _on_radio_var_change(self, *args):
+        """变量变化回调"""
+        print(f"[DEBUG SelectDialog] radio_var changed to: '{self.radio_var.get()}'")
 
     def _on_save(self):
         """保存"""
-        self.on_save(self.radio_var.get())
+        print(f"[DEBUG SelectDialog] >>> _on_save() method called! <<<")
+        selected_value = self.radio_var.get()
+        print(f"[DEBUG SelectDialog] _on_save: selected_value='{selected_value}'")
+        print(f"[DEBUG SelectDialog] _on_save: current_value was='{self.current_value}'")
+        print(f"[DEBUG SelectDialog] _on_save: on_save callback is: {self.on_save}")
+
+        if selected_value:
+            print(f"[DEBUG SelectDialog] Calling on_save callback with: '{selected_value}'")
+            self.on_save(selected_value)
+            print(f"[DEBUG SelectDialog] on_save callback completed")
+        else:
+            print(f"[DEBUG SelectDialog] WARNING: selected_value is empty!")
+
+        print(f"[DEBUG SelectDialog] About to destroy dialog")
         self.destroy()
+        print(f"[DEBUG SelectDialog] Dialog destroyed")
