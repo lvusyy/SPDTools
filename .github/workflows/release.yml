@@ -26,11 +26,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller customtkinter hidapi
+          pip install pyinstaller customtkinter hidapi pillow
 
       - name: Build executable
         run: |
-          pyinstaller --name="SPD_Studio" --windowed --onefile --icon=screenshots/overview.png --add-data="screenshots;screenshots" main.py
+          pyinstaller --name="SPD_Studio" --windowed --onefile --add-data="screenshots;screenshots" main.py
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
