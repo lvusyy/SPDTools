@@ -100,10 +100,11 @@ class HexView(ctk.CTkFrame):
         self.hex_text.bind("<Key>", self._on_key)
 
         # 配置标签样式
+        # 注意: CTkTextbox 的 tag_config 不支持 font 选项
         self.hex_text.tag_config("address", foreground="#6A9955")
         self.hex_text.tag_config("hex", foreground=Colors.TEXT)
         self.hex_text.tag_config("ascii", foreground="#CE9178")
-        self.hex_text.tag_config("modified", foreground=Colors.MODIFIED, font=("Consolas", 11, "bold"))
+        self.hex_text.tag_config("modified", foreground=Colors.MODIFIED)
         self.hex_text.tag_config("selected", background=Colors.PRIMARY)
         self.hex_text.tag_config("separator", foreground=Colors.TEXT_SECONDARY)
 
