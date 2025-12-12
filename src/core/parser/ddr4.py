@@ -337,16 +337,15 @@ class DDR4Parser:
         """
         解析单个 XMP Profile
 
-        XMP 2.0 Profile 布局 (相对于 profile 起始位置):
-        +0: Voltage (VDD)
-        +1: Reserved
-        +2-3: tCK (MTB + FTB style, 2 bytes for MTB)
-        +4-7: CAS Latency支持位
-        +8: tAA (MTB)
-        +9: tRCD (MTB)
-        +10: tRP (MTB)
-        +11-12: tRAS (high nibble + low byte)
-        +13-14: tRC (high nibble + low byte)
+        根据实际数据分析，XMP 2.0 Profile 布局:
+        原始数据: A3 00 00 05 FF FF 03 00 50 64 64 10 BD 22 30 11 F0 0A 20 08
+
+        +0: Voltage (VDD) - 0xA3 = 1.375V
+        +3: tCK (MTB) - 0x05 = 5 * 125ps = 625ps = 3200 MT/s
+        +8: tAA (MTB) - 0x50 = 80 * 125ps = 10000ps = 10ns
+        +9: tRCD (MTB) - 0x64 = 100 * 125ps = 12500ps = 12.5ns
+        +10: tRP (MTB) - 0x64 = 100 * 125ps = 12500ps = 12.5ns
+        +11-12: tRAS upper/lower
         """
         profile = XMPProfile()
 
@@ -366,62 +365,67 @@ class DDR4Parser:
         profile.enabled = True
 
         # 电压解析: VDD = 1.20V + (voltage_byte[5:0] * 5mV)
-        # 常见值: 0x23 = 35 * 5mV = 175mV + 1.2V = 1.375V
-        #         0x1E = 30 * 5mV = 150mV + 1.2V = 1.35V
+        # 0xA3 & 0x3F = 0x23 = 35, 35 * 5mV = 175mV, 1.2V + 0.175V = 1.375V
+        # 但 Thaiphoon 显示 1.35V，所以可能是不同的计算方式
+        # 0x1E = 30, 30 * 5mV = 150mV, 1.2V + 0.15V = 1.35V
         profile.voltage = 1.2 + (voltage_byte & 0x3F) * 0.005
         print(f"[DEBUG XMP] Profile {profile_num} voltage: {profile.voltage:.3f}V (byte=0x{voltage_byte:02X})")
 
-        # tCK (时钟周期) - XMP 中的 tCK 格式可能与标准 SPD 不同
-        # 尝试读取 2 字节的 tCK MTB 值
-        tck_byte1 = self.data[start_offset + 2]
-        tck_byte2 = self.data[start_offset + 3] if start_offset + 3 < len(self.data) else 0
+        # tCK - 尝试多个位置找到合理的 tCK 值
+        tck_candidates = [
+            (3, "offset+3"),  # 根据实际数据，tCK 在 offset +3
+            (2, "offset+2"),
+            (1, "offset+1"),
+        ]
 
-        # XMP 2.0 中 tCK 通常在 offset +2 位置，单字节 MTB
-        tck_mtb = tck_byte1
-        if tck_mtb > 0 and tck_mtb < 255:
-            profile.tCK = tck_mtb * MTB / 1000  # 转换为 ns
-            # 频率 = 2000 / tCK(ns) 得到 MT/s
-            profile.frequency = int(2000 / profile.tCK) if profile.tCK > 0 else 0
-            print(f"[DEBUG XMP] Profile {profile_num} tCK attempt 1: byte=0x{tck_mtb:02X}, tCK={profile.tCK:.3f}ns, freq={profile.frequency} MT/s")
-
-        # 如果频率计算不合理，尝试其他解析方式
-        if profile.frequency < 1600 or profile.frequency > 6000:
-            # 可能 tCK 在不同位置，或使用不同编码
-            # 尝试直接使用 byte 1 作为 tCK
-            tck_mtb = self.data[start_offset + 1]
-            if tck_mtb > 0 and tck_mtb < 255:
-                profile.tCK = tck_mtb * MTB / 1000
+        for tck_offset, desc in tck_candidates:
+            tck_mtb = self.data[start_offset + tck_offset] if start_offset + tck_offset < len(self.data) else 0
+            if tck_mtb > 0 and tck_mtb < 20:  # tCK 通常在 4-15 范围 (DDR4-1600 到 DDR4-4000)
+                profile.tCK = tck_mtb * MTB / 1000  # 转换为 ns
                 profile.frequency = int(2000 / profile.tCK) if profile.tCK > 0 else 0
-                print(f"[DEBUG XMP] Profile {profile_num} tCK attempt 2: byte=0x{tck_mtb:02X}, tCK={profile.tCK:.3f}ns, freq={profile.frequency} MT/s")
+                print(f"[DEBUG XMP] Profile {profile_num} tCK from {desc}: byte=0x{tck_mtb:02X}, tCK={profile.tCK:.3f}ns, freq={profile.frequency} MT/s")
+                if 1600 <= profile.frequency <= 6000:
+                    break
 
-        # 时序参数 - 根据 XMP 2.0 布局
+        if profile.frequency < 1600 or profile.frequency > 6000:
+            print(f"[DEBUG XMP] Profile {profile_num} WARNING: Could not find valid tCK")
+            profile.frequency = 0
+
+        # 时序参数
         # tAA (CAS Latency Time) 在 offset +8
         taa_byte = self.data[start_offset + 8] if start_offset + 8 < len(self.data) else 0
+        print(f"[DEBUG XMP] Profile {profile_num} tAA raw: 0x{taa_byte:02X} ({taa_byte})")
 
-        # CL = tAA / tCK (向上取整)
+        # CL = tAA / tCK
         if profile.tCK > 0 and taa_byte > 0:
             taa_ns = taa_byte * MTB / 1000
             profile.CL = round(taa_ns / profile.tCK)
-            print(f"[DEBUG XMP] Profile {profile_num} CL: tAA_byte=0x{taa_byte:02X}, tAA={taa_ns:.3f}ns, CL={profile.CL}")
+            print(f"[DEBUG XMP] Profile {profile_num} CL: tAA={taa_ns:.3f}ns / tCK={profile.tCK:.3f}ns = CL{profile.CL}")
 
         # tRCD 在 offset +9
         trcd_byte = self.data[start_offset + 9] if start_offset + 9 < len(self.data) else 0
         if profile.tCK > 0 and trcd_byte > 0:
-            profile.tRCD = round((trcd_byte * MTB / 1000) / profile.tCK)
+            trcd_ns = trcd_byte * MTB / 1000
+            profile.tRCD = round(trcd_ns / profile.tCK)
+            print(f"[DEBUG XMP] Profile {profile_num} tRCD: {trcd_ns:.3f}ns = {profile.tRCD} cycles")
 
         # tRP 在 offset +10
         trp_byte = self.data[start_offset + 10] if start_offset + 10 < len(self.data) else 0
         if profile.tCK > 0 and trp_byte > 0:
-            profile.tRP = round((trp_byte * MTB / 1000) / profile.tCK)
+            trp_ns = trp_byte * MTB / 1000
+            profile.tRP = round(trp_ns / profile.tCK)
+            print(f"[DEBUG XMP] Profile {profile_num} tRP: {trp_ns:.3f}ns = {profile.tRP} cycles")
 
-        # tRAS 在 offset +11-12 (高位在前)
-        tras_high = (self.data[start_offset + 11] & 0x0F) if start_offset + 11 < len(self.data) else 0
-        tras_low = self.data[start_offset + 12] if start_offset + 12 < len(self.data) else 0
-        tras_mtb = (tras_high << 8) + tras_low
+        # tRAS 在 offset +11-12 (upper nibble + lower byte)
+        tras_upper = (self.data[start_offset + 11] & 0x0F) if start_offset + 11 < len(self.data) else 0
+        tras_lower = self.data[start_offset + 12] if start_offset + 12 < len(self.data) else 0
+        tras_mtb = (tras_upper << 8) | tras_lower
         if profile.tCK > 0 and tras_mtb > 0:
-            profile.tRAS = round((tras_mtb * MTB / 1000) / profile.tCK)
+            tras_ns = tras_mtb * MTB / 1000
+            profile.tRAS = round(tras_ns / profile.tCK)
+            print(f"[DEBUG XMP] Profile {profile_num} tRAS: raw=0x{tras_upper:X}{tras_lower:02X} ({tras_mtb}), {tras_ns:.3f}ns = {profile.tRAS} cycles")
 
-        print(f"[DEBUG XMP] Profile {profile_num} timings: CL{profile.CL}-{profile.tRCD}-{profile.tRP}-{profile.tRAS} @ {profile.frequency} MT/s")
+        print(f"[DEBUG XMP] Profile {profile_num} FINAL: CL{profile.CL}-{profile.tRCD}-{profile.tRP}-{profile.tRAS} @ {profile.frequency} MT/s, {profile.voltage:.3f}V")
 
         return profile
 
