@@ -41,6 +41,7 @@ MANUFACTURERS = {
     (2, 0x83): "Kingmax",
     (2, 0x25): "Kingmax",
     (2, 0xF7): "Silicon Power",
+    (2, 0x98): "Kingston",  # Kingston Technology
 
     # Bank 3
     (3, 0x9B): "Mushkin",

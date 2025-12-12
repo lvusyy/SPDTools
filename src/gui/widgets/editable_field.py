@@ -144,6 +144,7 @@ class EditableField(ctk.CTkFrame):
 
     def _on_value_changed(self, new_value: str):
         """值变化回调"""
+        print(f"[DEBUG EditableField] _on_value_changed: old='{self._value}', new='{new_value}'")
         if new_value != self._value:
             self._value = new_value
             self.value_label.configure(text=new_value)
@@ -151,6 +152,7 @@ class EditableField(ctk.CTkFrame):
             self.modified_indicator.grid()
 
             if self.on_change:
+                print(f"[DEBUG EditableField] Calling on_change callback")
                 self.on_change(self.label_text, new_value)
 
     def set_value(self, value: str, is_modified: bool = False):

@@ -98,6 +98,9 @@ class HexView(ctk.CTkFrame):
         self.hex_text.bind("<Button-1>", self._on_click)
         self.hex_text.bind("<Double-Button-1>", self._on_double_click)
         self.hex_text.bind("<Key>", self._on_key)
+        # 禁用拖动选择，防止复制时混合十六进制和 ASCII
+        self.hex_text.bind("<B1-Motion>", lambda e: "break")
+        self.hex_text.bind("<<Selection>>", lambda e: self.hex_text.tag_remove("sel", "1.0", "end"))
 
         # 配置标签样式
         # 注意: CTkTextbox 的 tag_config 不支持 font 选项
@@ -369,20 +372,24 @@ class ByteEditDialog(ctk.CTkToplevel):
 
         # 按钮
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=20, pady=(10, 20))
+        btn_frame.pack(fill="x", padx=20, pady=(15, 20))
 
         ctk.CTkButton(
             btn_frame,
             text="取消",
+            width=100,
+            height=32,
             fg_color=Colors.SECONDARY,
             command=self.destroy
-        ).pack(side="left", expand=True, padx=(0, 5))
+        ).pack(side="left", expand=True, padx=(0, 10))
 
         ctk.CTkButton(
             btn_frame,
             text="保存",
+            width=100,
+            height=32,
             command=self._on_save
-        ).pack(side="right", expand=True, padx=(5, 0))
+        ).pack(side="right", expand=True, padx=(10, 0))
 
     def _on_hex_change(self, event):
         """十六进制输入变化"""
