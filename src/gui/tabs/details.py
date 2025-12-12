@@ -129,13 +129,17 @@ class DetailsTab(ctk.CTkFrame):
         if not self.data_model.has_data:
             return
 
+        print(f"[DEBUG] Field changed: key={key}, value={value}")
+
         # 根据字段类型更新 SPD 数据
         if key == "manufacturer":
             # 更新制造商 ID
             first_byte, second_byte = get_manufacturer_id(value)
-            if first_byte != 0 or second_byte != 0:
-                self.data_model.set_byte(SPD_BYTES.MANUFACTURER_ID_FIRST, first_byte)
-                self.data_model.set_byte(SPD_BYTES.MANUFACTURER_ID_SECOND, second_byte)
+            print(f"[DEBUG] Manufacturer ID: first_byte=0x{first_byte:02X}, second_byte=0x{second_byte:02X}")
+            # 移除不必要的条件检查，始终更新
+            self.data_model.set_byte(SPD_BYTES.MANUFACTURER_ID_FIRST, first_byte)
+            self.data_model.set_byte(SPD_BYTES.MANUFACTURER_ID_SECOND, second_byte)
+            print(f"[DEBUG] Updated manufacturer bytes at {SPD_BYTES.MANUFACTURER_ID_FIRST} and {SPD_BYTES.MANUFACTURER_ID_SECOND}")
 
         elif key == "part_number":
             # 更新部件号 (20 字符，右侧填充空格)

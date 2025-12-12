@@ -341,7 +341,7 @@ class HexEditDialog(ctk.CTkToplevel):
         super().__init__(parent)
 
         self.title(title)
-        self.geometry("350x200")
+        self.geometry("350x250")
         self.resizable(False, False)
 
         self.current_value = current_value
