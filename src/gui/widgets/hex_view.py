@@ -4,6 +4,7 @@
 
 import customtkinter as ctk
 from tkinter import font as tkfont
+import tkinter as tk
 from typing import Optional, Callable, List, Set
 
 from ...utils.constants import Colors, SPD_SIZE
@@ -96,8 +97,14 @@ class HexView(ctk.CTkFrame):
 
         # 绑定事件
         self.hex_text.bind("<Button-1>", self._on_click)
+        self.hex_text.bind("<B1-Motion>", self._on_drag)
+        self.hex_text.bind("<ButtonRelease-1>", self._on_release)
         self.hex_text.bind("<Double-Button-1>", self._on_double_click)
+        self.hex_text.bind("<Button-3>", self._on_right_click)
         self.hex_text.bind("<Key>", self._on_key)
+
+        # 创建右键菜单
+        self._create_context_menu()
 
         # 配置标签样式
         # 注意: CTkTextbox 的 tag_config 不支持 font 选项
@@ -106,7 +113,18 @@ class HexView(ctk.CTkFrame):
         self.hex_text.tag_config("ascii", foreground="#CE9178")
         self.hex_text.tag_config("modified", foreground=Colors.MODIFIED)
         self.hex_text.tag_config("selected", background=Colors.PRIMARY)
+        self.hex_text.tag_config("range_selected", background="#264F78")
         self.hex_text.tag_config("separator", foreground=Colors.TEXT_SECONDARY)
+
+    def _create_context_menu(self):
+        """创建右键上下文菜单"""
+        self.context_menu = tk.Menu(self, tearoff=0)
+        self.context_menu.add_command(label="复制十六进制", command=self._copy_hex)
+        self.context_menu.add_command(label="复制ASCII", command=self._copy_ascii)
+        self.context_menu.add_command(label="复制十六进制 + ASCII", command=self._copy_hex_and_ascii)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="复制为C数组", command=self._copy_as_c_array)
+        self.context_menu.add_command(label="复制为Python列表", command=self._copy_as_python_list)
 
     def _update_display(self):
         """更新显示内容"""
@@ -163,12 +181,54 @@ class HexView(ctk.CTkFrame):
             self.hex_text.configure(state="disabled")
 
     def _on_click(self, event):
-        """点击事件"""
-        # 获取点击位置对应的偏移量
-        index = self.hex_text.index(f"@{event.x},{event.y}")
+        """点击事件 - 开始选择"""
+        offset = self._get_offset_from_position(event.x, event.y)
+        if offset >= 0:
+            self._selection_start = offset
+            self._selection_end = offset
+            self._select_byte(offset)
+
+    def _on_drag(self, event):
+        """拖拽事件 - 扩展选择范围"""
+        offset = self._get_offset_from_position(event.x, event.y)
+        if offset >= 0 and self._selection_start >= 0:
+            self._selection_end = offset
+            self._highlight_range_selection()
+
+    def _on_release(self, event):
+        """释放鼠标 - 完成选择"""
+        if self._selection_start >= 0 and self._selection_end >= 0:
+            # 确保 start <= end
+            if self._selection_start > self._selection_end:
+                self._selection_start, self._selection_end = self._selection_end, self._selection_start
+            self._update_selection_label()
+
+    def _on_right_click(self, event):
+        """右键点击 - 显示上下文菜单"""
+        # 如果没有选择范围，选择点击的字节
+        offset = self._get_offset_from_position(event.x, event.y)
+        if offset >= 0:
+            if self._selection_start < 0 or self._selection_end < 0:
+                self._selection_start = offset
+                self._selection_end = offset
+                self._select_byte(offset)
+            elif offset < min(self._selection_start, self._selection_end) or offset > max(self._selection_start, self._selection_end):
+                # 点击在选择范围外，重新选择
+                self._selection_start = offset
+                self._selection_end = offset
+                self._select_byte(offset)
+
+        # 显示右键菜单
+        try:
+            self.context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.context_menu.grab_release()
+
+    def _get_offset_from_position(self, x: int, y: int) -> int:
+        """从屏幕坐标获取字节偏移量"""
+        index = self.hex_text.index(f"@{x},{y}")
         line, col = map(int, index.split("."))
 
-        # 计算偏移量
         # 格式: "XXX  HH HH HH HH HH HH HH HH  HH HH HH HH HH HH HH HH  |................|"
         # 地址占 5 字符，每个十六进制占 3 字符（含空格），中间额外空格 2 字符
         if col >= 5 and col < 53:  # 十六进制区域
@@ -179,7 +239,119 @@ class HexView(ctk.CTkFrame):
             if byte_index < self.BYTES_PER_ROW:
                 offset = (line - 1) * self.BYTES_PER_ROW + byte_index
                 if offset < len(self._data):
-                    self._select_byte(offset)
+                    return offset
+        elif col >= 55 and col < 71:  # ASCII 区域
+            ascii_col = col - 55
+            if ascii_col < self.BYTES_PER_ROW:
+                offset = (line - 1) * self.BYTES_PER_ROW + ascii_col
+                if offset < len(self._data):
+                    return offset
+        return -1
+
+    def _highlight_range_selection(self):
+        """高亮范围选择"""
+        self.hex_text.tag_remove("range_selected", "1.0", "end")
+        self.hex_text.tag_remove("selected", "1.0", "end")
+
+        if self._selection_start < 0 or self._selection_end < 0:
+            return
+
+        start = min(self._selection_start, self._selection_end)
+        end = max(self._selection_start, self._selection_end)
+
+        for offset in range(start, end + 1):
+            row = offset // self.BYTES_PER_ROW
+            col = offset % self.BYTES_PER_ROW
+
+            # 高亮十六进制区域
+            text_col = 5 + col * 3
+            if col >= 8:
+                text_col += 2
+            hex_start = f"{row + 1}.{text_col}"
+            hex_end = f"{row + 1}.{text_col + 2}"
+            self.hex_text.tag_add("range_selected", hex_start, hex_end)
+
+            # 高亮 ASCII 区域
+            ascii_col = 55 + col
+            ascii_start = f"{row + 1}.{ascii_col}"
+            ascii_end = f"{row + 1}.{ascii_col + 1}"
+            self.hex_text.tag_add("range_selected", ascii_start, ascii_end)
+
+        self._update_selection_label()
+
+    def _update_selection_label(self):
+        """更新选择信息标签"""
+        if self._selection_start >= 0 and self._selection_end >= 0:
+            start = min(self._selection_start, self._selection_end)
+            end = max(self._selection_start, self._selection_end)
+            count = end - start + 1
+            if count == 1:
+                self.selection_label.configure(
+                    text=f"选择: 0x{start:03X} = 0x{self._data[start]:02X} ({self._data[start]})"
+                )
+            else:
+                self.selection_label.configure(
+                    text=f"选择: 0x{start:03X} - 0x{end:03X} ({count} 字节)"
+                )
+
+    def _get_selected_bytes(self) -> List[int]:
+        """获取选中的字节"""
+        if self._selection_start < 0 or self._selection_end < 0:
+            if self._selected_offset >= 0:
+                return [self._data[self._selected_offset]]
+            return []
+
+        start = min(self._selection_start, self._selection_end)
+        end = max(self._selection_start, self._selection_end)
+        return self._data[start:end + 1]
+
+    def _copy_hex(self):
+        """复制为十六进制字符串"""
+        bytes_data = self._get_selected_bytes()
+        if bytes_data:
+            hex_str = " ".join(f"{b:02X}" for b in bytes_data)
+            self._copy_to_clipboard(hex_str)
+            print(f"[DEBUG HexView] Copied hex: {hex_str}")
+
+    def _copy_ascii(self):
+        """复制为ASCII字符串"""
+        bytes_data = self._get_selected_bytes()
+        if bytes_data:
+            ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in bytes_data)
+            self._copy_to_clipboard(ascii_str)
+            print(f"[DEBUG HexView] Copied ASCII: {ascii_str}")
+
+    def _copy_hex_and_ascii(self):
+        """复制十六进制和ASCII"""
+        bytes_data = self._get_selected_bytes()
+        if bytes_data:
+            hex_str = " ".join(f"{b:02X}" for b in bytes_data)
+            ascii_str = "".join(chr(b) if 32 <= b < 127 else "." for b in bytes_data)
+            combined = f"{hex_str}  |{ascii_str}|"
+            self._copy_to_clipboard(combined)
+            print(f"[DEBUG HexView] Copied hex+ASCII: {combined}")
+
+    def _copy_as_c_array(self):
+        """复制为C数组格式"""
+        bytes_data = self._get_selected_bytes()
+        if bytes_data:
+            c_array = "{ " + ", ".join(f"0x{b:02X}" for b in bytes_data) + " }"
+            self._copy_to_clipboard(c_array)
+            print(f"[DEBUG HexView] Copied C array: {c_array}")
+
+    def _copy_as_python_list(self):
+        """复制为Python列表格式"""
+        bytes_data = self._get_selected_bytes()
+        if bytes_data:
+            py_list = "[" + ", ".join(f"0x{b:02X}" for b in bytes_data) + "]"
+            self._copy_to_clipboard(py_list)
+            print(f"[DEBUG HexView] Copied Python list: {py_list}")
+
+    def _copy_to_clipboard(self, text: str):
+        """复制到剪贴板"""
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update()
 
     def _on_double_click(self, event):
         """双击编辑"""
@@ -236,19 +408,25 @@ class HexView(ctk.CTkFrame):
         if self._selected_offset < 0:
             return
 
+        self.hex_text.tag_remove("selected", "1.0", "end")
+        self.hex_text.tag_remove("range_selected", "1.0", "end")
+
         row = self._selected_offset // self.BYTES_PER_ROW
         col = self._selected_offset % self.BYTES_PER_ROW
 
-        # 计算文本位置
+        # 高亮十六进制区域
         text_col = 5 + col * 3
         if col >= 8:
             text_col += 2  # 跳过中间分隔
+        hex_start = f"{row + 1}.{text_col}"
+        hex_end = f"{row + 1}.{text_col + 2}"
+        self.hex_text.tag_add("selected", hex_start, hex_end)
 
-        start = f"{row + 1}.{text_col}"
-        end = f"{row + 1}.{text_col + 2}"
-
-        self.hex_text.tag_remove("selected", "1.0", "end")
-        self.hex_text.tag_add("selected", start, end)
+        # 高亮 ASCII 区域
+        ascii_col = 55 + col
+        ascii_start = f"{row + 1}.{ascii_col}"
+        ascii_end = f"{row + 1}.{ascii_col + 1}"
+        self.hex_text.tag_add("selected", ascii_start, ascii_end)
 
     def _edit_byte(self, offset: int):
         """编辑字节（弹出对话框）"""
