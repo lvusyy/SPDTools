@@ -17,7 +17,7 @@ class LogTab(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)  # 日志文本框在 row 1
 
         self._setup_ui()
 

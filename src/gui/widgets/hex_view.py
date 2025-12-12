@@ -34,8 +34,8 @@ class HexView(ctk.CTkFrame):
         self._selection_start = -1
         self._selection_end = -1
 
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)  # 主显示区域在 row 1
 
         self._setup_ui()
         self._update_display()

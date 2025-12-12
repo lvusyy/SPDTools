@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any
 from ..widgets.editable_field import EditableField
 from ...core.model import SPDDataModel, DataChangeEvent
 from ...core.parser import DDR4Parser
-from ...core.parser.manufacturers import COMMON_MANUFACTURERS
+from ...core.parser.manufacturers import COMMON_MANUFACTURERS, get_manufacturer_id
 from ...utils.constants import Colors, SPD_BYTES, MODULE_TYPES
 
 
@@ -126,10 +126,87 @@ class DetailsTab(ctk.CTkFrame):
 
     def _on_field_changed(self, key: str, value: str):
         """字段变更回调"""
+        if not self.data_model.has_data:
+            return
+
         # 根据字段类型更新 SPD 数据
-        # 这里需要根据具体字段映射到 SPD 字节
-        # 暂时只做显示，实际编辑功能需要更复杂的逻辑
-        pass
+        if key == "manufacturer":
+            # 更新制造商 ID
+            first_byte, second_byte = get_manufacturer_id(value)
+            if first_byte != 0 or second_byte != 0:
+                self.data_model.set_byte(SPD_BYTES.MANUFACTURER_ID_FIRST, first_byte)
+                self.data_model.set_byte(SPD_BYTES.MANUFACTURER_ID_SECOND, second_byte)
+
+        elif key == "part_number":
+            # 更新部件号 (20 字符，右侧填充空格)
+            part_number = value.ljust(20)[:20]
+            for i, char in enumerate(part_number):
+                offset = SPD_BYTES.PART_NUMBER_START + i
+                self.data_model.set_byte(offset, ord(char))
+
+        elif key == "serial_number":
+            # 更新序列号 (4 字节十六进制)
+            try:
+                hex_str = value.replace("0x", "").replace("0X", "").replace(" ", "")
+                if len(hex_str) <= 8:
+                    hex_str = hex_str.zfill(8)
+                    for i in range(4):
+                        byte_val = int(hex_str[i*2:(i+1)*2], 16)
+                        self.data_model.set_byte(SPD_BYTES.SERIAL_NUMBER_1 + i, byte_val)
+            except ValueError:
+                pass
+
+        elif key == "manufacturing_date":
+            # 更新生产日期 (格式: YYYY-WXX 或 WXX/YYYY)
+            try:
+                # 尝试解析各种格式
+                value = value.strip()
+                year = None
+                week = None
+
+                if "/" in value:
+                    # 格式: W26/2023 或 26/2023
+                    parts = value.split("/")
+                    week_part = parts[0].replace("W", "").replace("w", "")
+                    week = int(week_part)
+                    year = int(parts[1]) % 100  # 取后两位
+                elif "-W" in value.upper():
+                    # 格式: 2023-W26
+                    parts = value.upper().split("-W")
+                    year = int(parts[0]) % 100
+                    week = int(parts[1])
+                elif len(value) == 4 and value.isdigit():
+                    # 只有年份
+                    year = int(value) % 100
+                    week = 1
+
+                if year is not None:
+                    self.data_model.set_byte(SPD_BYTES.MANUFACTURING_YEAR, year)
+                if week is not None:
+                    self.data_model.set_byte(SPD_BYTES.MANUFACTURING_WEEK, week)
+            except (ValueError, IndexError):
+                pass
+
+        elif key == "module_type":
+            # 更新模组类型
+            for type_code, type_name in MODULE_TYPES.items():
+                if type_name == value:
+                    self.data_model.set_byte(SPD_BYTES.MODULE_TYPE, type_code)
+                    break
+
+        elif key == "speed_grade":
+            # 更新速度等级 (通过修改 tCK_min)
+            # 速度等级 = 2000000 / tCK_min (ps)
+            # tCK_min = 2000000 / speed_grade
+            try:
+                speed = int(value)
+                if 1600 <= speed <= 5000:
+                    # tCK_min in ps, MTB = 125ps
+                    tck_ps = 2000000 / speed
+                    tck_mtb = int(tck_ps / 125)
+                    self.data_model.set_byte(SPD_BYTES.TCK_MIN, tck_mtb)
+            except ValueError:
+                pass
 
     def refresh(self):
         """刷新显示"""

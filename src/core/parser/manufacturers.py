@@ -186,3 +186,24 @@ COMMON_MANUFACTURERS = [
     "Ramaxel Technology",
     "Nanya",
 ]
+
+
+def get_manufacturer_id(name: str) -> tuple:
+    """
+    根据制造商名称获取 ID
+
+    Args:
+        name: 制造商名称
+
+    Returns:
+        (first_byte, second_byte) 元组，未找到返回 (0x00, 0x00)
+    """
+    for (bank, mid), mfr_name in MANUFACTURERS.items():
+        if mfr_name == name:
+            # first_byte 表示 bank (简化处理)
+            first_byte = bank - 1 if bank > 1 else 0x00
+            # second_byte 是制造商 ID，加上奇偶校验位
+            # 简化处理：直接使用原始 ID
+            second_byte = mid | 0x80  # 设置最高位（奇偶校验）
+            return (first_byte, second_byte)
+    return (0x00, 0x00)
