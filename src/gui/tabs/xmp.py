@@ -7,9 +7,10 @@ import customtkinter as ctk
 from typing import Optional, Dict, Any
 
 from ..widgets.editable_field import EditableField
+from ..widgets.xmp_edit_dialog import XMPEditDialog
 from ...core.model import SPDDataModel, DataChangeEvent
 from ...core.parser import DDR4Parser
-from ...utils.constants import Colors
+from ...utils.constants import Colors, SPD_BYTES, MTB
 
 
 class XMPTab(ctk.CTkFrame):
@@ -95,7 +96,20 @@ class XMPTab(ctk.CTkFrame):
             font=("Arial", 12, "bold"),
             text_color=Colors.HIGHLIGHT
         )
-        freq_label.pack(side="right")
+        freq_label.pack(side="right", padx=(0, 10))
+
+        # 编辑按钮
+        edit_btn = ctk.CTkButton(
+            title_frame,
+            text="编辑",
+            width=60,
+            height=24,
+            font=("Arial", 10),
+            fg_color=Colors.PRIMARY,
+            hover_color=Colors.HIGHLIGHT,
+            command=lambda: self._on_edit_profile(profile_num, profile_data)
+        )
+        edit_btn.pack(side="right")
 
         # 分隔线
         separator = ctk.CTkFrame(frame, height=1, fg_color=Colors.SECONDARY)
@@ -184,3 +198,128 @@ class XMPTab(ctk.CTkFrame):
         )
         self.xmp_version_label.configure(text="")
         self.no_xmp_label.grid()
+
+        # 添加创建 XMP 按钮
+        create_frame = ctk.CTkFrame(self.profiles_container, fg_color="transparent")
+        create_frame.grid(row=1, column=0, columnspan=2, pady=20)
+
+        ctk.CTkButton(
+            create_frame,
+            text="创建 XMP Profile 1",
+            width=180,
+            fg_color=Colors.SUCCESS,
+            hover_color=Colors.HIGHLIGHT,
+            command=lambda: self._on_create_profile(1)
+        ).pack(side="left", padx=10)
+
+        ctk.CTkButton(
+            create_frame,
+            text="创建 XMP Profile 2",
+            width=180,
+            fg_color=Colors.SUCCESS,
+            hover_color=Colors.HIGHLIGHT,
+            command=lambda: self._on_create_profile(2)
+        ).pack(side="left", padx=10)
+
+    def _on_edit_profile(self, profile_num: int, profile_data: Dict):
+        """编辑 XMP Profile"""
+        if not self.data_model.has_data:
+            return
+
+        # 打开编辑对话框
+        XMPEditDialog(
+            self.winfo_toplevel(),
+            profile_num=profile_num,
+            profile_data=profile_data,
+            on_save=lambda data: self._write_xmp_profile(profile_num, data)
+        )
+
+    def _on_create_profile(self, profile_num: int):
+        """创建新的 XMP Profile"""
+        if not self.data_model.has_data:
+            return
+
+        # 使用默认值创建新 Profile
+        default_data = {
+            "frequency": 3200,
+            "voltage": 1.350,
+            "cl": 16,
+            "trcd": 18,
+            "trp": 18,
+            "tras": 38
+        }
+
+        # 打开编辑对话框
+        XMPEditDialog(
+            self.winfo_toplevel(),
+            profile_num=profile_num,
+            profile_data=default_data,
+            on_save=lambda data: self._write_xmp_profile(profile_num, data, is_new=True)
+        )
+
+    def _write_xmp_profile(self, profile_num: int, data: Dict, is_new: bool = False):
+        """写入 XMP Profile 到 SPD 数据"""
+        # 如果是新建 Profile，先初始化 XMP 头部
+        if is_new:
+            # 检查是否已有 XMP 头部
+            xmp_header = self.data_model.get_byte(SPD_BYTES.XMP_HEADER)
+            if xmp_header != 0x0C:
+                # 初始化 XMP 头部
+                self.data_model.set_byte(SPD_BYTES.XMP_HEADER, 0x0C)
+                self.data_model.set_byte(SPD_BYTES.XMP_HEADER + 1, 0x4A)  # 'J'
+                self.data_model.set_byte(SPD_BYTES.XMP_REVISION, 0x20)  # XMP 2.0
+
+        # 计算 Profile 偏移
+        profile_offset = SPD_BYTES.XMP_PROFILE1_START if profile_num == 1 else SPD_BYTES.XMP_PROFILE2_START
+
+        # 频率 -> tCK (MTB)
+        freq_mhz = data.get("frequency", 3200)
+        tck_ps = 2000000 / freq_mhz  # 2000000 ps / MT/s
+        tck_mtb = int(tck_ps / MTB)
+
+        # 电压编码: 1.2V + (byte[5:0] × 5mV), bit7 = enabled
+        voltage = data.get("voltage", 1.350)
+        voltage_mv = int((voltage - 1.2) * 1000 / 5)  # Convert to 5mV units
+        voltage_byte = 0x80 | (voltage_mv & 0x3F)  # Set bit 7 (enabled) + voltage
+
+        # CL/tRCD/tRP/tRAS 时序
+        cl = data.get("cl", 16)
+        trcd_ns = data.get("trcd", 18)
+        trp_ns = data.get("trp", 18)
+        tras_ns = data.get("tras", 38)
+
+        # 转换为 MTB
+        trcd_mtb = int(trcd_ns * 1000 / MTB)
+        trp_mtb = int(trp_ns * 1000 / MTB)
+        tras_mtb = int(tras_ns * 1000 / MTB)
+
+        # 写入 Profile 数据 (根据 XMP 2.0 规范)
+        # Offset +0: 电压
+        self.data_model.set_byte(profile_offset + 0, voltage_byte)
+
+        # Offset +3: tCK (MTB)
+        self.data_model.set_byte(profile_offset + 3, tck_mtb)
+
+        # Offset +8: tAA (CL in MTB)
+        taa_mtb = int(cl * tck_ps / MTB)
+        self.data_model.set_byte(profile_offset + 8, taa_mtb)
+
+        # Offset +9: tRCD (MTB)
+        self.data_model.set_byte(profile_offset + 9, trcd_mtb)
+
+        # Offset +10: tRP (MTB)
+        self.data_model.set_byte(profile_offset + 10, trp_mtb)
+
+        # Offset +11-12: tRAS (16-bit MTB)
+        self.data_model.set_byte(profile_offset + 11, tras_mtb & 0xFF)
+        self.data_model.set_byte(profile_offset + 12, (tras_mtb >> 8) & 0xFF)
+
+        # 启用 Profile (设置 Profile 启用位)
+        profile_enabled = self.data_model.get_byte(SPD_BYTES.XMP_PROFILE_ENABLED)
+        if profile_num == 1:
+            profile_enabled |= 0x01
+        else:
+            profile_enabled |= 0x02
+        self.data_model.set_byte(SPD_BYTES.XMP_PROFILE_ENABLED, profile_enabled)
+
+        # Refresh will be triggered automatically by data model observer
