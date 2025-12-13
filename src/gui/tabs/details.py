@@ -29,46 +29,88 @@ class DetailsTab(ctk.CTkFrame):
         self.data_model.add_observer(self._on_data_changed)
 
     def _setup_ui(self):
-        """设置UI"""
+        """设置UI - 两列布局"""
         # 可滚动区域
         self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll_frame.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-        self.scroll_frame.grid_columnconfigure(0, weight=1)
+        # 配置两列等宽布局
+        self.scroll_frame.grid_columnconfigure(0, weight=1, uniform="col")
+        self.scroll_frame.grid_columnconfigure(1, weight=1, uniform="col")
 
-        # 分组：基本信息
+        # 当前行索引（用于跟踪每列的位置）
+        self._left_row = 0
+        self._right_row = 0
+
+        # 左列分组
         self._create_section("基本信息", [
             ("内存类型", "memory_type", "text", False),
             ("模组类型", "module_type", "select", True, list(MODULE_TYPES.values())),
             ("容量", "capacity", "text", False),
             ("组织结构", "organization", "text", False),
             ("总线宽度", "bus_width", "text", False),
-        ])
+        ], column=0)
 
-        # 分组：速度配置
         self._create_section("速度配置", [
             ("速度等级", "speed_grade", "number", True, 1600, 5000),
             ("电压", "voltage", "text", False),
-        ])
+        ], column=0)
 
-        # 分组：制造商信息
-        self._create_section("制造商信息", [
-            ("制造商", "manufacturer", "select", True, COMMON_MANUFACTURERS),
-            ("部件号", "part_number", "text", True),
-            ("序列号", "serial_number", "hex", True, None, None, True),  # 添加 show_serial_generator
-            ("生产日期", "manufacturing_date", "text", True),
-        ])
-
-        # 分组：SPD 元数据
         self._create_section("SPD 元数据", [
             ("SPD 字节使用", "spd_bytes_used", "text", False),
             ("SPD 修订版", "spd_revision", "text", False),
-        ])
+        ], column=0)
 
-    def _create_section(self, title: str, fields: list):
-        """创建一个参数分组"""
-        # 分组标题
+        self._create_section("内存组织", [
+            ("行地址位", "row_bits", "text", False),
+            ("列地址位", "col_bits", "text", False),
+            ("页大小", "page_size", "text", False),
+            ("Bank 组数", "bank_groups", "text", False),
+            ("每组 Bank 数", "banks_per_group", "text", False),
+            ("总 Bank 数", "total_banks", "text", False),
+        ], column=0)
+
+        # 右列分组
+        self._create_section("制造商信息", [
+            ("制造商", "manufacturer", "select", True, COMMON_MANUFACTURERS),
+            ("部件号", "part_number", "text", True),
+            ("序列号", "serial_number", "hex", True, None, None, True),
+            ("生产日期", "manufacturing_date", "text", True),
+        ], column=1)
+
+        self._create_section("DRAM 信息", [
+            ("DRAM 制造商", "dram_manufacturer", "text", False),
+            ("Die 密度", "die_density", "text", False),
+            ("Die 数量", "die_count", "text", False),
+            ("封装类型", "package_type", "text", False),
+            ("Die 组织", "die_organization", "text", False),
+        ], column=1)
+
+        self._create_section("总线配置", [
+            ("主总线宽度", "primary_bus_width", "text", False),
+            ("ECC 宽度", "ecc_width", "text", False),
+            ("总宽度", "total_bus_width", "text", False),
+            ("温度传感器", "thermal_sensor", "text", False),
+        ], column=1)
+
+    def _create_section(self, title: str, fields: list, column: int = 0):
+        """创建一个参数分组
+
+        Args:
+            title: 分组标题
+            fields: 字段配置列表
+            column: 放置的列（0=左列, 1=右列）
+        """
+        # 获取当前列的行索引
+        if column == 0:
+            row = self._left_row
+            self._left_row += 1
+        else:
+            row = self._right_row
+            self._right_row += 1
+
+        # 分组容器
         section_frame = ctk.CTkFrame(self.scroll_frame, fg_color=Colors.CARD_BG, corner_radius=10)
-        section_frame.pack(fill="x", pady=(0, 15))
+        section_frame.grid(row=row, column=column, sticky="nsew", padx=(0, 8) if column == 0 else (8, 0), pady=(0, 15))
         section_frame.grid_columnconfigure(0, weight=1)
 
         # 标题
@@ -234,6 +276,13 @@ class DetailsTab(ctk.CTkFrame):
             return
 
         # 更新字段值
+        die_info = info.get("die_info", {})
+        bank_config = info.get("bank_config", {})
+        addressing = info.get("addressing", {})
+        ecc_info = info.get("ecc_info", {})
+        thermal = info.get("thermal_sensor", {})
+        dram_mfr = info.get("dram_manufacturer", {})
+
         field_mapping = {
             "memory_type": info.get("memory_type", "-"),
             "module_type": info.get("module_type", "-"),
@@ -248,6 +297,24 @@ class DetailsTab(ctk.CTkFrame):
             "manufacturing_date": info.get("manufacturing_date", "-"),
             "spd_bytes_used": f"{self.data_model.data[0]} bytes" if self.data_model.has_data else "-",
             "spd_revision": f"{self.data_model.data[1] >> 4}.{self.data_model.data[1] & 0x0F}" if self.data_model.has_data else "-",
+            # DRAM 信息
+            "dram_manufacturer": dram_mfr.get("name", "-"),
+            "die_density": f"{die_info.get('density_gb', '-')} Gb",
+            "die_count": str(die_info.get("die_count", "-")),
+            "package_type": die_info.get("package_type", "-"),
+            "die_organization": die_info.get("organization", "-"),
+            # 内存组织
+            "row_bits": str(addressing.get("row_bits", "-")),
+            "col_bits": str(addressing.get("col_bits", "-")),
+            "page_size": addressing.get("page_size_str", "-"),
+            "bank_groups": str(bank_config.get("bank_groups", "-")),
+            "banks_per_group": str(bank_config.get("banks_per_group", "-")),
+            "total_banks": str(bank_config.get("total_banks", "-")),
+            # 总线配置
+            "primary_bus_width": f"{ecc_info.get('primary_width', '-')} bits",
+            "ecc_width": f"{ecc_info.get('extension_width', '-')} bits" if ecc_info.get('has_ecc') else "N/A",
+            "total_bus_width": f"{ecc_info.get('total_width', '-')} bits",
+            "thermal_sensor": thermal.get("description", "-"),
         }
 
         print(f"[DEBUG DetailsTab] Updating fields with: manufacturer={field_mapping['manufacturer']}, module_type={field_mapping['module_type']}")
