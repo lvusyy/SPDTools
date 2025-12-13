@@ -7,10 +7,12 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 from .manufacturers import get_manufacturer_name
+from .die_database import infer_die_type, get_die_description
 from ...utils.constants import (
     SPD_SIZE, SPD_BYTES, DDR4_TYPE, MODULE_TYPES,
     DENSITY_MAP, DEVICE_WIDTH, ROW_BITS, COL_BITS,
-    MTB, FTB, SPEED_GRADES, XMP_MAGIC
+    MTB, FTB, SPEED_GRADES, XMP_MAGIC,
+    PACKAGE_TYPES, DIE_COUNTS, SIGNAL_LOADING, BANKS_PER_GROUP
 )
 
 
@@ -24,11 +26,42 @@ class TimingInfo:
     tRAS: float = 0     # Active to Precharge (ns)
     tRC: float = 0      # Active to Active/Refresh (ns)
     tRFC1: float = 0    # Refresh Recovery (ns)
+    tRFC2: float = 0    # Refresh Recovery 2x mode (ns)
+    tRFC4: float = 0    # Refresh Recovery 4x mode (ns)
     tFAW: float = 0     # Four Activate Window (ns)
     tRRD_S: float = 0   # Activate to Activate (different bank group)
     tRRD_L: float = 0   # Activate to Activate (same bank group)
     tCCD_L: float = 0   # CAS to CAS (same bank group)
+    tWR: float = 0      # Write Recovery (ns)
+    tWTR_S: float = 0   # Write to Read (different bank group) (ns)
+    tWTR_L: float = 0   # Write to Read (same bank group) (ns)
     CL: int = 0         # CAS Latency (cycles)
+
+
+@dataclass
+class DieInfo:
+    """Die/Package Information"""
+    density_gb: float = 0      # Die density in Gb
+    die_count: int = 1         # Number of dies
+    package_type: str = ""     # Monolithic or 3DS
+    signal_loading: str = ""   # Signal loading type
+    organization: str = ""     # e.g., "2048 Mb x8 (64M x 8 x 32 banks)"
+
+
+@dataclass
+class BankConfig:
+    """Bank Configuration"""
+    bank_groups: int = 4       # Number of bank groups
+    banks_per_group: int = 4   # Banks per group (always 4 for DDR4)
+    total_banks: int = 16      # Total banks
+
+
+@dataclass
+class AddressingInfo:
+    """Memory Addressing Information"""
+    row_bits: int = 0          # Number of row address bits
+    col_bits: int = 0          # Number of column address bits
+    page_size_bytes: int = 0   # Page size = 2^col_bits * device_width / 8
 
 
 @dataclass
@@ -87,6 +120,7 @@ class DDR4Parser:
         addressing_byte = self.data[SPD_BYTES.ADDRESSING]
         org_byte = self.data[SPD_BYTES.MODULE_ORG]
         width_byte = self.data[SPD_BYTES.BUS_WIDTH]
+        package_byte = self.data[SPD_BYTES.PACKAGE_TYPE]
 
         # 密度 (per die)
         density_code = density_byte & 0x0F
@@ -112,10 +146,19 @@ class DDR4Parser:
         bus_width_code = width_byte & 0x07
         bus_width = 8 * (1 << bus_width_code)  # 8, 16, 32, 64
 
+        # 3DS (Non-Monolithic) package detection from byte 6
+        # Bit 7: Package Type (0 = Monolithic, 1 = Non-Monolithic/3DS)
+        # Bits 6:4: Die count for 3DS (0=1, 1=2, 2=3, 3=4, 4=5, 5=6, 6=7, 7=8)
+        is_3ds = (package_byte >> 7) & 0x01
+        die_count_code = (package_byte >> 4) & 0x07
+        die_count = DIE_COUNTS.get(die_count_code, 1) if is_3ds else 1
+
         # 计算总容量 (GB)
-        # 容量 = 密度 * (64 / 设备宽度) * Rank数 / 8
+        # 标准容量 = 密度 * (64 / 设备宽度) * Rank数 / 8
+        # 对于 3DS 封装，需要乘以堆叠的 Die 数量
+        # Formula: capacity_gb = density_gb * (bus_width / device_width) * ranks * die_count / 8
         if device_width > 0:
-            capacity_gb = density_gb * (64 / device_width) * ranks / 8
+            capacity_gb = density_gb * (bus_width / device_width) * ranks * die_count / 8
         else:
             capacity_gb = 0
 
@@ -129,7 +172,9 @@ class DDR4Parser:
             "bus_width": bus_width,
             "total_capacity_gb": capacity_gb,
             "capacity_str": self._format_capacity(capacity_gb),
-            "organization": f"{ranks}Rx{device_width}"
+            "organization": f"{ranks}Rx{device_width}",
+            "is_3ds": is_3ds,
+            "die_count": die_count
         }
 
     def _format_capacity(self, capacity_gb: float) -> str:
@@ -194,6 +239,14 @@ class DDR4Parser:
         trfc1 = (self.data[SPD_BYTES.TRFC1_HIGH] << 8) + self.data[SPD_BYTES.TRFC1_LOW]
         timing.tRFC1 = trfc1 * MTB / 1000
 
+        # tRFC2 (bytes 32-33)
+        trfc2 = (self.data[SPD_BYTES.TRFC2_HIGH] << 8) + self.data[SPD_BYTES.TRFC2_LOW]
+        timing.tRFC2 = trfc2 * MTB / 1000
+
+        # tRFC4 (bytes 34-35)
+        trfc4 = (self.data[SPD_BYTES.TRFC4_HIGH] << 8) + self.data[SPD_BYTES.TRFC4_LOW]
+        timing.tRFC4 = trfc4 * MTB / 1000
+
         # tFAW
         tfaw_high = (self.data[SPD_BYTES.TFAW_HIGH] & 0x0F) << 8
         tfaw_low = self.data[SPD_BYTES.TFAW_LOW]
@@ -207,6 +260,17 @@ class DDR4Parser:
 
         # tCCD_L
         timing.tCCD_L = self.data[SPD_BYTES.TCCD_L_MIN] * MTB / 1000
+
+        # tWR (bytes 41-42, uses high nibble + low byte)
+        twr_high = (self.data[SPD_BYTES.TWR_MIN_HIGH] & 0x0F) << 8
+        twr_low = self.data[SPD_BYTES.TWR_MIN_LOW]
+        timing.tWR = (twr_high + twr_low) * MTB / 1000
+
+        # tWTR_S (byte 43)
+        timing.tWTR_S = self.data[SPD_BYTES.TWTR_S_MIN] * MTB / 1000
+
+        # tWTR_L (byte 44)
+        timing.tWTR_L = self.data[SPD_BYTES.TWTR_L_MIN] * MTB / 1000
 
         # 计算 CL (cycles)
         if timing.tCK > 0:
@@ -288,6 +352,147 @@ class DDR4Parser:
         week_str = f"{(week >> 4) & 0x0F}{week & 0x0F}"
 
         return f"{year_str} Week {week_str}"
+
+    def parse_die_info(self) -> DieInfo:
+        """解析 Die 和封装信息"""
+        density_byte = self.data[SPD_BYTES.DENSITY_BANKS]
+        package_byte = self.data[SPD_BYTES.PACKAGE_TYPE]
+        org_byte = self.data[SPD_BYTES.MODULE_ORG]
+
+        # Die density from byte 4, bits 3:0
+        density_code = density_byte & 0x0F
+        density_gb = DENSITY_MAP.get(density_code, 0)
+
+        # Package type from byte 6, bit 7
+        is_3ds = (package_byte >> 7) & 0x01
+        package_type = PACKAGE_TYPES.get(is_3ds, "Unknown")
+
+        # Die count from byte 6, bits 6:4
+        die_count_code = (package_byte >> 4) & 0x07
+        die_count = DIE_COUNTS.get(die_count_code, 1)
+
+        # Signal loading from byte 6, bits 1:0
+        signal_code = package_byte & 0x03
+        signal_loading = SIGNAL_LOADING.get(signal_code, "Not specified")
+
+        # Device width for organization string
+        device_width_code = org_byte & 0x07
+        device_width = DEVICE_WIDTH.get(device_width_code, 8)
+
+        # Bank groups
+        bg_code = (density_byte >> 6) & 0x03
+        bank_groups = 4 if bg_code == 0 else 2
+
+        # Organization string (e.g., "2048 Mb x8 (64M x 8 x 32 banks)")
+        density_mb = int(density_gb * 1024)
+        banks_total = bank_groups * BANKS_PER_GROUP
+        organization = f"{density_mb} Mb x{device_width} ({density_mb//8}M x {device_width} x {banks_total} banks)"
+
+        return DieInfo(
+            density_gb=density_gb,
+            die_count=die_count,
+            package_type=package_type,
+            signal_loading=signal_loading,
+            organization=organization
+        )
+
+    def parse_bank_config(self) -> BankConfig:
+        """解析 Bank 组配置"""
+        density_byte = self.data[SPD_BYTES.DENSITY_BANKS]
+
+        # Bank groups from byte 4, bits 7:6
+        bg_code = (density_byte >> 6) & 0x03
+        bank_groups = 4 if bg_code == 0 else 2
+
+        banks_per_group = BANKS_PER_GROUP  # Always 4 for DDR4
+        total_banks = bank_groups * banks_per_group
+
+        return BankConfig(
+            bank_groups=bank_groups,
+            banks_per_group=banks_per_group,
+            total_banks=total_banks
+        )
+
+    def parse_addressing_info(self) -> AddressingInfo:
+        """解析详细地址信息"""
+        addressing_byte = self.data[SPD_BYTES.ADDRESSING]
+        org_byte = self.data[SPD_BYTES.MODULE_ORG]
+
+        # Row address bits from byte 5, bits 5:3
+        row_code = (addressing_byte >> 3) & 0x07
+        row_bits = ROW_BITS.get(row_code, 0)
+
+        # Column address bits from byte 5, bits 2:0
+        col_code = addressing_byte & 0x07
+        col_bits = COL_BITS.get(col_code, 0)
+
+        # Device width for page size calculation
+        device_width_code = org_byte & 0x07
+        device_width = DEVICE_WIDTH.get(device_width_code, 8)
+
+        # Page size = 2^col_bits * device_width / 8 (in bytes)
+        page_size = (2 ** col_bits) * device_width // 8
+
+        return AddressingInfo(
+            row_bits=row_bits,
+            col_bits=col_bits,
+            page_size_bytes=page_size
+        )
+
+    def parse_ecc_info(self) -> Dict[str, Any]:
+        """解析 ECC/总线宽度扩展信息"""
+        width_byte = self.data[SPD_BYTES.BUS_WIDTH]
+
+        # Primary bus width from bits 2:0
+        primary_code = width_byte & 0x07
+        primary_width = 8 * (1 << primary_code)  # 8, 16, 32, 64
+
+        # Bus width extension from bits 4:3
+        ext_code = (width_byte >> 3) & 0x03
+        extension_width = {
+            0b00: 0,   # No extension
+            0b01: 8,   # 8-bit extension (ECC)
+            0b10: 16,  # Reserved
+            0b11: 0    # Reserved
+        }.get(ext_code, 0)
+
+        total_width = primary_width + extension_width
+        has_ecc = extension_width > 0
+
+        return {
+            "primary_width": primary_width,
+            "extension_width": extension_width,
+            "total_width": total_width,
+            "has_ecc": has_ecc,
+            "ecc_type": "ECC" if has_ecc else "Non-ECC"
+        }
+
+    def parse_thermal_sensor(self) -> Dict[str, Any]:
+        """解析温度传感器状态"""
+        thermal_byte = self.data[SPD_BYTES.THERMAL_SENSOR]
+
+        # Bit 7: Thermal sensor
+        has_sensor = bool((thermal_byte >> 7) & 0x01)
+
+        return {
+            "present": has_sensor,
+            "description": "Thermal Sensor Present" if has_sensor else "No Thermal Sensor"
+        }
+
+    def parse_dram_manufacturer(self) -> Dict[str, str]:
+        """解析 DRAM 制造商（与模组制造商分离）"""
+        if len(self.data) <= SPD_BYTES.DRAM_MANUFACTURER_ID_SECOND:
+            return {"name": "Unknown", "id_bytes": "0x0000"}
+
+        first_byte = self.data[SPD_BYTES.DRAM_MANUFACTURER_ID_FIRST]
+        second_byte = self.data[SPD_BYTES.DRAM_MANUFACTURER_ID_SECOND]
+
+        manufacturer = get_manufacturer_name(first_byte, second_byte)
+
+        return {
+            "name": manufacturer,
+            "id_bytes": f"0x{first_byte:02X}{second_byte:02X}",
+        }
 
     def parse_xmp(self) -> Dict[str, Any]:
         """解析 XMP 配置"""
@@ -444,8 +649,13 @@ class DDR4Parser:
 
         return f"CL{cl}-{trcd}-{trp}-{tras}"
 
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典格式"""
+    def to_dict(self, mode: str = "spd") -> Dict[str, Any]:
+        """
+        转换为字典格式
+
+        Args:
+            mode: 显示模式 ("spd" = 仅 SPD 数据, "read" = 包含推断信息)
+        """
         if not self.is_valid():
             return {"error": "Invalid DDR4 data"}
 
@@ -453,8 +663,14 @@ class DDR4Parser:
         timing = self.parse_timings()
         manufacturer = self.parse_manufacturer()
         xmp = self.parse_xmp()
+        die_info = self.parse_die_info()
+        bank_config = self.parse_bank_config()
+        addressing = self.parse_addressing_info()
+        ecc_info = self.parse_ecc_info()
+        thermal = self.parse_thermal_sensor()
+        dram_manufacturer = self.parse_dram_manufacturer()
 
-        return {
+        result = {
             "memory_type": self.parse_memory_type(),
             "module_type": self.parse_module_type(),
             "capacity": capacity["capacity_str"],
@@ -474,12 +690,53 @@ class DDR4Parser:
                 "tRAS": f"{timing.tRAS:.3f} ns",
                 "tRC": f"{timing.tRC:.3f} ns",
                 "tRFC1": f"{timing.tRFC1:.1f} ns",
+                "tRFC2": f"{timing.tRFC2:.1f} ns",
+                "tRFC4": f"{timing.tRFC4:.1f} ns",
+                "tWR": f"{timing.tWR:.3f} ns",
+                "tWTR_S": f"{timing.tWTR_S:.3f} ns",
+                "tWTR_L": f"{timing.tWTR_L:.3f} ns",
                 "CL": timing.CL,
             },
             "supported_cl": self.parse_cas_latencies(),
             "xmp": xmp,
             "capacity_details": capacity,
+            "die_info": {
+                "density_gb": die_info.density_gb,
+                "die_count": die_info.die_count,
+                "package_type": die_info.package_type,
+                "signal_loading": die_info.signal_loading,
+                "organization": die_info.organization,
+            },
+            "bank_config": {
+                "bank_groups": bank_config.bank_groups,
+                "banks_per_group": bank_config.banks_per_group,
+                "total_banks": bank_config.total_banks,
+            },
+            "addressing": {
+                "row_bits": addressing.row_bits,
+                "col_bits": addressing.col_bits,
+                "page_size_bytes": addressing.page_size_bytes,
+                "page_size_str": f"{addressing.page_size_bytes // 1024} KB" if addressing.page_size_bytes >= 1024 else f"{addressing.page_size_bytes} bytes",
+            },
+            "ecc_info": ecc_info,
+            "thermal_sensor": thermal,
+            "dram_manufacturer": dram_manufacturer,
+            "display_mode": mode,
         }
+
+        # Add inferred information in "read" mode
+        if mode == "read":
+            part_number = self.parse_part_number()
+            inferred = infer_die_type(part_number, dram_manufacturer["name"])
+
+            result["die_info_inferred"] = {
+                "die_type": inferred.get("die_type", "Unknown") if inferred else "Unknown",
+                "process_node": inferred.get("process", "Unknown") if inferred else "Unknown",
+                "die_description": get_die_description(inferred, die_info.density_gb),
+                "inferred": inferred is not None,
+            }
+
+        return result
 
     def parse(self) -> str:
         """

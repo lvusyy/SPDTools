@@ -54,6 +54,10 @@ class SPD_BYTES:
     TRRD_S_MIN = 38         # 最小 tRRD_S
     TRRD_L_MIN = 39         # 最小 tRRD_L
     TCCD_L_MIN = 40         # 最小 tCCD_L
+    TWR_MIN_HIGH = 41       # tWR 高位 (bits 11:8)
+    TWR_MIN_LOW = 42        # tWR 低位 (bits 7:0)
+    TWTR_S_MIN = 43         # 最小 tWTR_S
+    TWTR_L_MIN = 44         # 最小 tWTR_L
 
     # 细粒度时序调整 (FTB)
     TCK_MIN_FTB = 125       # tCK Fine Offset
@@ -75,6 +79,10 @@ class SPD_BYTES:
     PART_NUMBER_START = 329       # 部件号起始位置
     PART_NUMBER_END = 348         # 部件号结束位置 (20字符)
     REVISION_CODE = 349           # 修订代码
+
+    # DRAM 制造商信息 (350-351，与模组制造商分离)
+    DRAM_MANUFACTURER_ID_FIRST = 350   # DRAM 制造商 ID (第一字节)
+    DRAM_MANUFACTURER_ID_SECOND = 351  # DRAM 制造商 ID (第二字节)
 
     # XMP 2.0 配置 (384-511)
     # 根据 XMP 2.0 规范
@@ -153,17 +161,43 @@ MTB = 125    # Medium Time Base = 125ps
 FTB = 1      # Fine Time Base = 1ps
 
 # 频率速度等级映射 (tCK -> MT/s)
+# tCK ranges based on JEDEC standard:
+# DDR4-3200: 625ps (1600MHz), DDR4-2933: 682ps (1466.5MHz), DDR4-2666: 750ps (1333MHz)
 SPEED_GRADES = {
-    (625, 750): 3200,
-    (750, 833): 2666,
-    (833, 938): 2400,
-    (938, 1071): 2133,
-    (1071, 1250): 1866,
-    (1250, 1500): 1600,
+    (625, 682): 3200,    # DDR4-3200: tCK = 625ps
+    (682, 750): 2933,    # DDR4-2933: tCK = 682ps (added - was missing!)
+    (750, 833): 2666,    # DDR4-2666: tCK = 750ps
+    (833, 938): 2400,    # DDR4-2400: tCK = 833ps
+    (938, 1071): 2133,   # DDR4-2133: tCK = 938ps
+    (1071, 1250): 1866,  # DDR4-1866: tCK = 1071ps
+    (1250, 1500): 1600,  # DDR4-1600: tCK = 1250ps
 }
 
 # XMP 标识
 XMP_MAGIC = 0x0C
+
+# Package Type (Byte 6, bit 7)
+PACKAGE_TYPES = {
+    0: "Monolithic",
+    1: "3DS (Non-Monolithic)"
+}
+
+# Die Count (Byte 6, bits 6:4)
+DIE_COUNTS = {
+    0: 1, 1: 2, 2: 3, 3: 4,
+    4: 5, 5: 6, 6: 7, 7: 8
+}
+
+# Signal Loading (Byte 6, bits 1:0)
+SIGNAL_LOADING = {
+    0: "Not specified",
+    1: "Multi-load stack",
+    2: "Single-load stack (3DS)",
+    3: "Reserved"
+}
+
+# Banks per bank group (DDR4 always has 4 banks per group)
+BANKS_PER_GROUP = 4
 
 # UI 颜色主题
 class Colors:
