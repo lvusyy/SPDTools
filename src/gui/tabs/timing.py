@@ -133,10 +133,15 @@ class TimingTab(ctk.CTkFrame):
 
         advanced_timings = [
             ("tRFC1 (Refresh Recovery)", "tRFC1"),
+            ("tRFC2 (Refresh Recovery 2x)", "tRFC2"),
+            ("tRFC4 (Refresh Recovery 4x)", "tRFC4"),
             ("tFAW (Four Activate Window)", "tFAW"),
             ("tRRD_S (Act to Act, diff BG)", "tRRD_S"),
             ("tRRD_L (Act to Act, same BG)", "tRRD_L"),
             ("tCCD_L (CAS to CAS, same BG)", "tCCD_L"),
+            ("tWR (Write Recovery)", "tWR"),
+            ("tWTR_S (Write to Read, diff BG)", "tWTR_S"),
+            ("tWTR_L (Write to Read, same BG)", "tWTR_L"),
         ]
 
         for i, (label, key) in enumerate(advanced_timings):
@@ -208,6 +213,10 @@ class TimingTab(ctk.CTkFrame):
         timing_obj = parser.parse_timings()
         if "tRFC1" in self.fields:
             self.fields["tRFC1"].set_value(f"{timing_obj.tRFC1:.1f} ns")
+        if "tRFC2" in self.fields:
+            self.fields["tRFC2"].set_value(f"{timing_obj.tRFC2:.1f} ns")
+        if "tRFC4" in self.fields:
+            self.fields["tRFC4"].set_value(f"{timing_obj.tRFC4:.1f} ns")
         if "tFAW" in self.fields:
             self.fields["tFAW"].set_value(f"{timing_obj.tFAW:.3f} ns")
         if "tRRD_S" in self.fields:
@@ -216,6 +225,12 @@ class TimingTab(ctk.CTkFrame):
             self.fields["tRRD_L"].set_value(f"{timing_obj.tRRD_L:.3f} ns")
         if "tCCD_L" in self.fields:
             self.fields["tCCD_L"].set_value(f"{timing_obj.tCCD_L:.3f} ns")
+        if "tWR" in self.fields:
+            self.fields["tWR"].set_value(f"{timing_obj.tWR:.3f} ns")
+        if "tWTR_S" in self.fields:
+            self.fields["tWTR_S"].set_value(f"{timing_obj.tWTR_S:.3f} ns")
+        if "tWTR_L" in self.fields:
+            self.fields["tWTR_L"].set_value(f"{timing_obj.tWTR_L:.3f} ns")
 
         # 更新支持的 CL
         supported_cl = info.get("supported_cl", [])
